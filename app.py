@@ -13,7 +13,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# मोबाइल फ्रेंडली टच स्टाइलिंग
 st.markdown("""
     <style>
     .main { padding: 0.5rem; }
@@ -22,13 +21,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. API Key प्रबंधन
+# 2. सुरक्षित API Key प्रबंधन (ऑटो-क्लीनिंग)
 # -------------------------------------------------------------
-api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
-if not api_key:
-    with st.sidebar:
-        st.header("⚙️ सेटिंग्स")
-        api_key = st.text_input("Gemini API Key दर्ज करें:", type="password")
+raw_api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+
+with st.sidebar:
+    st.header("⚙️ सेटिंग्स")
+    if not raw_api_key:
+        raw_api_key = st.text_input("Gemini API Key दर्ज करें:", type="password")
+
+# API Key को साफ करना (स्पेस व कोट्स हटाना)
+api_key = str(raw_api_key).strip().replace('"', '').replace("'", "")
 
 if not api_key:
     st.warning("⚠️ कृपया जारी रखने के लिए अपनी Gemini API Key दर्ज करें।")
@@ -40,30 +43,33 @@ client = genai.Client(api_key=api_key)
 SYSTEM_PROMPT = """
 आप छत्तीसगढ़ शासन के खाद्य, नागरिक आपूर्ति एवं उपभोक्ता संरक्षण विभाग के खाद्य निरीक्षक (Food Inspector) के लिए एक उच्चस्तरीय विशेषज्ञ एआई सहायक हैं।
 आपकी जिम्मेदारियां:
-1. छत्तीसगढ़ सार्वजनिक वितरण प्रणाली (नियंत्रण) आदेश, आवश्यक वस्तु अधिनियम 1955 (धारा 3/7), राष्ट्रीय खाद्य सुरक्षा अधिनियम (NFSA) 2013, विधिक माप विज्ञान अधिनियम एवं उपभोक्ता संरक्षण अधिनियम के तहत सटीक विधिक प्रारूप तैयार करना।
+1. छत्तीसगढ़ सार्वजनिक वितरण प्रणाली (नियंत्रण) आदेश, आवश्यक वस्तु अधिनियम 1955 (धारा 3/7), राष्ट्रीय खाद्य सुरक्षा अधिनियम (NFSA) 2013 एवं उपभोक्ता संरक्षण अधिनियम के तहत सटीक विधिक प्रारूप तैयार करना।
 2. शुद्ध, मानक शासकीय प्रशासनिक हिन्दी में 'कारण बताओ सूचना पत्र', 'पंचनामा', 'जब्ती सूची' एवं 'जांच प्रतिवेदन' तैयार करना।
 3. राशन दुकानों, राइस मिलों, धान खरीदी केंद्रों के स्टॉक व सीएमआर (CMR) का सटीक ऑडिट करना।
 """
 
 # -------------------------------------------------------------
-# 3. केंद्रीय सहायक फंक्शन
+# 3. केंद्रीय सहायक फंक्शन (एरर हैंडलिंग सहित)
 # -------------------------------------------------------------
 def call_gemini(prompt_or_contents, use_search=False) -> str:
-    config_params = {
-        "system_instruction": SYSTEM_PROMPT,
-        "temperature": 0.2,
-    }
-    if use_search:
-        config_params["tools"] = [{"google_search": {}}]
+    try:
+        config_params = {
+            "system_instruction": SYSTEM_PROMPT,
+            "temperature": 0.2,
+        }
+        if use_search:
+            config_params["tools"] = [{"google_search": {}}]
+            
+        config = types.GenerateContentConfig(**config_params)
         
-    config = types.GenerateContentConfig(**config_params)
-    
-    response = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=prompt_or_contents,
-        config=config,
-    )
-    return response.text
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt_or_contents,
+            config=config,
+        )
+        return response.text
+    except Exception as e:
+        return f"⚠️ त्रुटि (Error): {str(e)}"
 
 # -------------------------------------------------------------
 # 4. मुख्य यूजर इंटरफेस एवं टैब्स
@@ -80,7 +86,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # =============================================================
-# टैब 1: नोटिस एवं पंचनामा प्रारूप (सैंपल फाइल अपलोड सहित)
+# टैब 1: नोटिस एवं पंचनामा प्रारूप
 # =============================================================
 with tab1:
     st.subheader("📋 निरीक्षण नोटिस व पंचनामा तैयार करें")
@@ -128,8 +134,11 @@ with tab1:
                 
                 template_instruction = ""
                 if sample_file:
-                    sample_content = sample_file.read().decode("utf-8", errors="ignore")
-                    template_instruction = f"\nकृपया इस संलग्न सैंपल प्रारूप की भाषा व संरचना का पालन करें:\n{sample_content}\n"
+                    try:
+                        sample_content = sample_file.getvalue().decode("utf-8", errors="ignore")
+                        template_instruction = f"\nकृपया इस संलग्न सैंपल प्रारूप की भाषा व संरचना का पालन करें:\n{sample_content}\n"
+                    except Exception:
+                        pass
                 
                 prompt = f"""
                 निम्नलिखित विवरण के आधार पर मानक प्रशासनिक हिन्दी में औपचारिक '{doc_type}' का प्रारूप तैयार करें:
@@ -254,11 +263,6 @@ with tab4:
             with st.spinner("साक्ष्यों एवं बयानों का विश्लेषण कर प्रतिवेदन तैयार किया जा रहा है..."):
                 contents_payload = []
                 
-                # सभी फाइलों को बाइट्स में जोड़ें
-                if uploaded_files:
-                    for f in uploaded_files:
-                        contents_payload.append(types.Part.from_bytes(data=f.read(), mime_type=f.type))
-                
                 prompt_inquiry = f"""
                 छत्तीसगढ़ खाद्य विभाग के खाद्य निरीक्षक की ओर से एसडीएम/उच्चाधिकारी हेतु विस्तृत 'जांच प्रतिवेदन' तैयार करें:
                 - शिकायत स्रोत: {complaint_source}
@@ -273,6 +277,17 @@ with tab4:
                 """
                 contents_payload.append(prompt_inquiry)
                 
+                # फाइलों को सुरक्षित तरीके से जोड़ना
+                if uploaded_files:
+                    for f in uploaded_files:
+                        file_bytes = f.getvalue()
+                        mime_type = f.type or "application/octet-stream"
+                        if "text" in mime_type or f.name.endswith(".txt"):
+                            text_data = file_bytes.decode("utf-8", errors="ignore")
+                            contents_payload.append(f"\n[संलग्न टेक्स्ट फाइल ({f.name})]:\n{text_data}\n")
+                        else:
+                            contents_payload.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+                
                 inquiry_res = call_gemini(contents_payload)
                 st.markdown("### 📄 तैयार जांच प्रतिवेदन:")
                 st.text_area("प्रतिवेदन कॉपी करें", value=inquiry_res, height=450)
@@ -282,7 +297,7 @@ with tab4:
 # =============================================================
 with tab5:
     st.subheader("📖 केंद्र व राज्य शासकीय नियम व परिपत्र खोज")
-    st.caption("यह मॉड्यूल ऑनलाइन सरकारी पोर्टलों (khadya.cg.nic.in / dfpd.gov.in) से अद्यतन नियम खोजता है।")
+    st.caption("यह मॉड्यूल ऑनलाइन सरकारी पोर्टलों से अद्यतन नियम खोजता है।")
     
     query = st.text_input("नियम / परिपत्र संबंधी प्रश्न दर्ज करें:", placeholder="उदा. छत्तीसगढ़ में राशन दुकान निलंबन की कानूनी प्रक्रिया क्या है?")
     if st.button("ऑनलाइन नियम व आदेश खोजें", key="btn_search_law"):
