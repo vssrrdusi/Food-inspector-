@@ -1,5 +1,7 @@
 import os
+import io
 import streamlit as st
+from docx import Document
 from google import genai
 from google.genai import types
 
@@ -21,7 +23,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. सुरक्षित API Key प्रबंधन (ऑटो-क्लीनिंग)
+# 2. सुरक्षित API Key प्रबंधन
 # -------------------------------------------------------------
 raw_api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
@@ -30,18 +32,9 @@ with st.sidebar:
     if not raw_api_key:
         raw_api_key = st.text_input("Gemini API Key दर्ज करें:", type="password")
 
-# API Key को साफ करना (स्पेस व कोट्स हटाना)
-api_key = str(raw_api_key).strip().replace('"', '').replace("'", "")
-# API Key की वैधता जांच
 api_key = str(raw_api_key).strip().replace('"', '').replace("'", "")
 
-# यदि की में गैर-ASCII या हिन्दी शब्द हों
-if not api_key.isascii() or not api_key.startswith("AIza"):
-    st.error("⚠️ अमान्य API Key: कृपया aistudio.google.com से प्राप्त 'AIzaSy...' से शुरू होने वाली असली Gemini API Key दर्ज करें।")
-    st.stop()
-
-
-if not api_key:
+if not api_key.isascii() or len(api_key) < 10:
     st.warning("⚠️ कृपया जारी रखने के लिए अपनी Gemini API Key दर्ज करें।")
     st.stop()
 
@@ -56,8 +49,19 @@ SYSTEM_PROMPT = """
 3. राशन दुकानों, राइस मिलों, धान खरीदी केंद्रों के स्टॉक व सीएमआर (CMR) का सटीक ऑडिट करना।
 """
 
+# Word (.docx) फाइल बनाने का फंक्शन
+def create_docx(text_content: str, title: str) -> io.BytesIO:
+    doc = Document()
+    doc.add_heading(title, level=1)
+    for line in text_content.split("\n"):
+        doc.add_paragraph(line)
+    docx_io = io.BytesIO()
+    doc.save(docx_io)
+    docx_io.seek(0)
+    return docx_io
+
 # -------------------------------------------------------------
-# 3. केंद्रीय सहायक फंक्शन (एरर हैंडलिंग सहित)
+# 3. केंद्रीय सहायक फंक्शन
 # -------------------------------------------------------------
 def call_gemini(prompt_or_contents, use_search=False) -> str:
     try:
@@ -166,6 +170,14 @@ with tab1:
                 result = call_gemini(prompt)
                 st.markdown("### तैयार प्रारूप:")
                 st.text_area("कॉपी करें", value=result, height=350)
+                
+                docx_file = create_docx(result, doc_type)
+                st.download_button(
+                    label="📥 Word (.docx) फाइल डाउनलोड करें",
+                    data=docx_file,
+                    file_name=f"{entity_name}_{doc_type}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
 
 # =============================================================
 # टैब 2: राशन स्टॉक सत्यापन एवं अंतर गणना
@@ -285,7 +297,6 @@ with tab4:
                 """
                 contents_payload.append(prompt_inquiry)
                 
-                # फाइलों को सुरक्षित तरीके से जोड़ना
                 if uploaded_files:
                     for f in uploaded_files:
                         file_bytes = f.getvalue()
@@ -299,6 +310,14 @@ with tab4:
                 inquiry_res = call_gemini(contents_payload)
                 st.markdown("### 📄 तैयार जांच प्रतिवेदन:")
                 st.text_area("प्रतिवेदन कॉपी करें", value=inquiry_res, height=450)
+                
+                inquiry_docx = create_docx(inquiry_res, "जांच प्रतिवेदन")
+                st.download_button(
+                    label="📥 जांच प्रतिवेदन Word (.docx) डाउनलोड करें",
+                    data=inquiry_docx,
+                    file_name=f"Inquiry_Report_{complaint_no}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
 
 # =============================================================
 # टैब 5: ऑनलाइन शासकीय नियम एवं परिपत्र निर्देशिका (Live Search)
