@@ -61,27 +61,41 @@ def create_docx(text_content: str, title: str) -> io.BytesIO:
     return docx_io
 
 # -------------------------------------------------------------
-# 3. केंद्रीय सहायक फंक्शन
+# 3. केंद्रीय सहायक फंक्शन (Auto-Fallback Models)
 # -------------------------------------------------------------
 def call_gemini(prompt_or_contents, use_search=False) -> str:
-    try:
-        config_params = {
-            "system_instruction": SYSTEM_PROMPT,
-            "temperature": 0.2,
-        }
-        if use_search:
-            config_params["tools"] = [{"google_search": {}}]
+    models_to_try = [
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash-002",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash"
+    ]
+    last_error = ""
+    
+    for model_name in models_to_try:
+        try:
+            config_params = {
+                "system_instruction": SYSTEM_PROMPT,
+                "temperature": 0.2,
+            }
+            if use_search:
+                config_params["tools"] = [{"google_search": {}}]
+                
+            config = types.GenerateContentConfig(**config_params)
             
-        config = types.GenerateContentConfig(**config_params)
-        
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt_or_contents,
-            config=config,
-        )
-        return response.text
-    except Exception as e:
-        return f"⚠️ त्रुटि (Error): {str(e)}"
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt_or_contents,
+                config=config,
+            )
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            last_error = str(e)
+            continue
+            
+    return f"⚠️ त्रुटि (Error): {last_error}"
 
 # -------------------------------------------------------------
 # 4. मुख्य यूजर इंटरफेस एवं टैब्स
