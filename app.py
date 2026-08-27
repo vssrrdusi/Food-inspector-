@@ -2,8 +2,9 @@ import os
 import io
 import streamlit as st
 from docx import Document
-from google import genai
-from google.genai import types
+from PIL import Image
+import pypdf
+import google.generativeai as genai
 
 # -------------------------------------------------------------
 # 1. मोबाइल स्क्रीन एवं पेज कॉन्फ़िगरेशन
@@ -23,7 +24,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. सुरक्षित API Key प्रबंधन
+# 2. सुरक्षित API Key एवं मॉडल सेटअप
 # -------------------------------------------------------------
 raw_api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
@@ -34,12 +35,12 @@ with st.sidebar:
 
 api_key = str(raw_api_key).strip().replace('"', '').replace("'", "")
 
-if not api_key.isascii() or len(api_key) < 10:
+if not api_key:
     st.warning("⚠️ कृपया जारी रखने के लिए अपनी Gemini API Key दर्ज करें।")
     st.stop()
 
-# Gemini क्लाइंट
-client = genai.Client(api_key=api_key)
+# GenAI कॉन्फ़िगरेशन
+genai.configure(api_key=api_key)
 
 SYSTEM_PROMPT = """
 आप छत्तीसगढ़ शासन के खाद्य, नागरिक आपूर्ति एवं उपभोक्ता संरक्षण विभाग के खाद्य निरीक्षक (Food Inspector) के लिए एक उच्चस्तरीय विशेषज्ञ एआई सहायक हैं।
@@ -48,6 +49,24 @@ SYSTEM_PROMPT = """
 2. शुद्ध, मानक शासकीय प्रशासनिक हिन्दी में 'कारण बताओ सूचना पत्र', 'पंचनामा', 'जब्ती सूची' एवं 'जांच प्रतिवेदन' तैयार करना।
 3. राशन दुकानों, राइस मिलों, धान खरीदी केंद्रों के स्टॉक व सीएमआर (CMR) का सटीक ऑडिट करना।
 """
+
+# आपके अकाउंट के लिए सक्रिय मॉडल को स्वतः खोजना (Auto-Model Discovery)
+@st.cache_resource
+def get_working_model(key: str):
+    try:
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # प्राथमिकता क्रम
+        for pref in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
+            for m in available:
+                if pref in m:
+                    return genai.GenerativeModel(m, system_instruction=SYSTEM_PROMPT)
+        if available:
+            return genai.GenerativeModel(available[0], system_instruction=SYSTEM_PROMPT)
+    except Exception:
+        pass
+    return genai.GenerativeModel("gemini-1.5-flash", system_instruction=SYSTEM_PROMPT)
+
+model = get_working_model(api_key)
 
 # Word (.docx) फाइल बनाने का फंक्शन
 def create_docx(text_content: str, title: str) -> io.BytesIO:
@@ -60,45 +79,18 @@ def create_docx(text_content: str, title: str) -> io.BytesIO:
     docx_io.seek(0)
     return docx_io
 
-# -------------------------------------------------------------
-# 3. केंद्रीय सहायक फंक्शन (Auto-Fallback Models)
-# -------------------------------------------------------------
-def call_gemini(prompt_or_contents, use_search=False) -> str:
-    models_to_try = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash-002",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash"
-    ]
-    last_error = ""
-    
-    for model_name in models_to_try:
-        try:
-            config_params = {
-                "system_instruction": SYSTEM_PROMPT,
-                "temperature": 0.2,
-            }
-            if use_search:
-                config_params["tools"] = [{"google_search": {}}]
-                
-            config = types.GenerateContentConfig(**config_params)
-            
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt_or_contents,
-                config=config,
-            )
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            last_error = str(e)
-            continue
-            
-    return f"⚠️ त्रुटि (Error): {last_error}"
+# केंद्रीय कॉलिंग फंक्शन
+def generate_ai_response(contents) -> str:
+    try:
+        response = model.generate_content(contents)
+        if response and response.text:
+            return response.text
+        return "⚠️ कोई आउटपुट प्राप्त नहीं हुआ।"
+    except Exception as e:
+        return f"⚠️ त्रुटि (Error): {str(e)}"
 
 # -------------------------------------------------------------
-# 4. मुख्य यूजर इंटरफेस एवं टैब्स
+# 3. मुख्य यूजर इंटरफेस एवं टैब्स
 # -------------------------------------------------------------
 st.title("🌾 खाद्य निरीक्षक डिजिटल सहायक")
 st.caption("क्षेत्रीय निरीक्षण, स्टॉक सत्यापन, धान मॉनिटरिंग एवं विधिक प्रतिवेदन (छ.ग. खाद्य विभाग)")
@@ -181,7 +173,7 @@ with tab1:
                 2. 3 दिवस में जवाब प्रस्तुत करने का स्पष्ट निर्देश रखें।
                 3. हस्ताक्षर, पदमुद्रा एवं एसडीएम / सहायक खाद्य अधिकारी को प्रतिलिपि का स्थान रखें।
                 """
-                result = call_gemini(prompt)
+                result = generate_ai_response(prompt)
                 st.markdown("### तैयार प्रारूप:")
                 st.text_area("कॉपी करें", value=result, height=350)
                 
@@ -233,7 +225,7 @@ with tab2:
 
             इस आंकड़े के आधार पर खाद्य निरीक्षक हेतु एक संक्षिप्त जांच टीप तैयार करें जिसमें अंतर की स्थिति और छत्तीसगढ़ पीडीएस आदेश के तहत की जाने वाली आगामी कानूनी कार्रवाई का स्पष्ट उल्लेख हो।
             """
-            audit_result = call_gemini(prompt)
+            audit_result = generate_ai_response(prompt)
             st.markdown(audit_result)
 
 # =============================================================
@@ -265,7 +257,7 @@ with tab3:
             
             निर्देश: 3 दिवस में शेष चावल नागरिक आपूर्ति निगम/FCI में जमा करने, अन्यथा बैंक गारंटी राजसात करने और वसूली कार्रवाई की चेतावनी का उल्लेख करें।
             """
-            cmr_notice = call_gemini(prompt)
+            cmr_notice = generate_ai_response(prompt)
             st.text_area("नोटिस का प्रारूप", value=cmr_notice, height=300)
 
 # =============================================================
@@ -311,17 +303,25 @@ with tab4:
                 """
                 contents_payload.append(prompt_inquiry)
                 
+                # विभिन्न प्रकार की फाइलों (इमेज / PDF / टेक्स्ट) को सुरक्षित तरीके से पढ़ना
                 if uploaded_files:
                     for f in uploaded_files:
-                        file_bytes = f.getvalue()
-                        mime_type = f.type or "application/octet-stream"
-                        if "text" in mime_type or f.name.endswith(".txt"):
-                            text_data = file_bytes.decode("utf-8", errors="ignore")
-                            contents_payload.append(f"\n[संलग्न टेक्स्ट फाइल ({f.name})]:\n{text_data}\n")
-                        else:
-                            contents_payload.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+                        fname = f.name.lower()
+                        try:
+                            if fname.endswith(('.png', '.jpg', '.jpeg')):
+                                img = Image.open(f)
+                                contents_payload.append(img)
+                            elif fname.endswith('.pdf'):
+                                pdf_reader = pypdf.PdfReader(io.BytesIO(f.getvalue()))
+                                pdf_text = "\n".join([page.extract_text() or "" for page in pdf_reader.pages])
+                                contents_payload.append(f"\n[संलग्न PDF फाइल ({f.name}) का टेक्स्ट]:\n{pdf_text}\n")
+                            else:
+                                text_data = f.getvalue().decode("utf-8", errors="ignore")
+                                contents_payload.append(f"\n[संलग्न टेक्स्ट फाइल ({f.name})]:\n{text_data}\n")
+                        except Exception as e:
+                            st.warning(f"फाइल {f.name} पढ़ने में समस्या: {e}")
                 
-                inquiry_res = call_gemini(contents_payload)
+                inquiry_res = generate_ai_response(contents_payload)
                 st.markdown("### 📄 तैयार जांच प्रतिवेदन:")
                 st.text_area("प्रतिवेदन कॉपी करें", value=inquiry_res, height=450)
                 
@@ -334,21 +334,21 @@ with tab4:
                 )
 
 # =============================================================
-# टैब 5: ऑनलाइन शासकीय नियम एवं परिपत्र निर्देशिका (Live Search)
+# टैब 5: शासकीय नियम एवं परिपत्र निर्देशिका
 # =============================================================
 with tab5:
     st.subheader("📖 केंद्र व राज्य शासकीय नियम व परिपत्र खोज")
-    st.caption("यह मॉड्यूल ऑनलाइन सरकारी पोर्टलों से अद्यतन नियम खोजता है।")
+    st.caption("अधिनियम, नियंत्रण आदेश एवं विभागीय प्रक्रियाओं की जानकारी प्राप्त करें।")
     
     query = st.text_input("नियम / परिपत्र संबंधी प्रश्न दर्ज करें:", placeholder="उदा. छत्तीसगढ़ में राशन दुकान निलंबन की कानूनी प्रक्रिया क्या है?")
-    if st.button("ऑनलाइन नियम व आदेश खोजें", key="btn_search_law"):
+    if st.button("नियम व विधिक प्रावधान खोजें", key="btn_search_law"):
         if query:
-            with st.spinner("शासकीय आदेशों एवं अधिनियमों की ऑनलाइन खोज की जा रही है..."):
+            with st.spinner("शासकीय आदेशों एवं अधिनियमों का विश्लेषण किया जा रहा है..."):
                 search_prompt = f"""
-                छत्तीसगढ़ खाद्य निरीक्षक के कार्य के संदर्भ में निम्नलिखित प्रश्न का अद्यतन कानूनी व प्रक्रियात्मक उत्तर दें:
+                छत्तीसगढ़ खाद्य निरीक्षक के कार्य के संदर्भ में निम्नलिखित प्रश्न का कानूनी व प्रक्रियात्मक उत्तर दें:
                 प्रश्न: {query}
                 
-                आवश्यक वस्तु अधिनियम 1955, छत्तीसगढ़ पीडीएस नियंत्रण आदेश 2016, या संबंधित नवीनतम शासकीय परिपत्रों की धाराएं एवं क्रमांक सहित उत्तर दें।
+                आवश्यक वस्तु अधिनियम 1955, छत्तीसगढ़ पीडीएस नियंत्रण आदेश 2016, राष्ट्रीय खाद्य सुरक्षा अधिनियम 2013 एवं संबंधित विभागीय नियमों की धाराएं एवं क्रमांक सहित उत्तर दें।
                 """
-                search_res = call_gemini(search_prompt, use_search=True)
+                search_res = generate_ai_response(search_prompt)
                 st.markdown(search_res)
