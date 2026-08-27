@@ -32,6 +32,14 @@ with st.sidebar:
 
 # API Key को साफ करना (स्पेस व कोट्स हटाना)
 api_key = str(raw_api_key).strip().replace('"', '').replace("'", "")
+# API Key की वैधता जांच
+api_key = str(raw_api_key).strip().replace('"', '').replace("'", "")
+
+# यदि की में गैर-ASCII या हिन्दी शब्द हों
+if not api_key.isascii() or not api_key.startswith("AIza"):
+    st.error("⚠️ अमान्य API Key: कृपया aistudio.google.com से प्राप्त 'AIzaSy...' से शुरू होने वाली असली Gemini API Key दर्ज करें।")
+    st.stop()
+
 
 if not api_key:
     st.warning("⚠️ कृपया जारी रखने के लिए अपनी Gemini API Key दर्ज करें।")
