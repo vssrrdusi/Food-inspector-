@@ -2,6 +2,7 @@ import os
 import io
 import streamlit as st
 from PIL import Image
+import pypdf
 from docx import Document
 import google.generativeai as genai
 
@@ -34,16 +35,12 @@ with st.sidebar:
 
 api_key = str(raw_api_key).strip().replace('"', '').replace("'", "")
 
-if not api_key or len(api_key) < 10:
+if not api_key:
     st.warning("⚠️ कृपया जारी रखने के लिए अपनी Gemini API Key दर्ज करें।")
     st.stop()
 
-# Google Generative AI कॉन्फ़िगरेशन
-try:
-    genai.configure(api_key=api_key)
-except Exception as e:
-    st.error(f"API Key कॉन्फ़िगरेशन त्रुटि: {e}")
-    st.stop()
+# Gemini कॉन्फ़िगरेशन
+genai.configure(api_key=api_key)
 
 SYSTEM_PROMPT = """
 आप छत्तीसगढ़ शासन के खाद्य, नागरिक आपूर्ति एवं उपभोक्ता संरक्षण विभाग के खाद्य निरीक्षक (Food Inspector) के लिए एक उच्चस्तरीय विशेषज्ञ एआई सहायक हैं।
@@ -65,22 +62,44 @@ def create_docx(text_content: str, title: str) -> io.BytesIO:
     return docx_io
 
 # -------------------------------------------------------------
-# 3. केंद्रीय सहायक फंक्शन (स्थिर एवं विश्वसनीय)
+# 3. केंद्रीय सहायक फंक्शन (ऑटो-मॉडल सेलेक्टर)
 # -------------------------------------------------------------
 def call_gemini(contents_list) -> str:
+    # 1. आपके खाते में उपलब्ध मॉडल्स की लाइव सूची निकालना
+    candidate_models = []
     try:
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=SYSTEM_PROMPT,
-            generation_config={"temperature": 0.2}
-        )
-        response = model.generate_content(contents_list)
-        if response and response.text:
-            return response.text
-        else:
-            return "⚠️ कोई उत्तर प्राप्त नहीं हुआ। कृपया इनपुट पुनः जांचें।"
-    except Exception as e:
-        return f"⚠️ त्रुटि (Error): {str(e)}"
+        for m in genai.list_models():
+            if "generateContent" in m.supported_generation_methods:
+                candidate_models.append(m.name)
+    except Exception:
+        pass
+    
+    # 2. बैकअप मॉडल सूची
+    fallback_models = [
+        "gemini-2.0-flash", 
+        "gemini-1.5-flash-latest", 
+        "gemini-1.5-flash", 
+        "gemini-1.5-pro", 
+        "gemini-pro"
+    ]
+    
+    models_to_try = candidate_models + [m for m in fallback_models if m not in candidate_models]
+    last_err = ""
+
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=SYSTEM_PROMPT
+            )
+            response = model.generate_content(contents_list)
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            last_err = str(e)
+            continue
+            
+    return f"⚠️ त्रुटि (Error): {last_err}"
 
 # -------------------------------------------------------------
 # 4. मुख्य यूजर इंटरफेस एवं टैब्स
@@ -88,12 +107,11 @@ def call_gemini(contents_list) -> str:
 st.title("🌾 खाद्य निरीक्षक डिजिटल सहायक")
 st.caption("क्षेत्रीय निरीक्षण, स्टॉक सत्यापन, धान मॉनिटरिंग एवं विधिक प्रतिवेदन (छ.ग. खाद्य विभाग)")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📋 नोटिस/पंचनामा", 
     "⚖️ स्टॉक सत्यापन", 
     "🌾 धान व CMR", 
-    "📑 जनशिकायत जांच", 
-    "📖 नियम निर्देशिका"
+    "📑 जनशिकायत जांच"
 ])
 
 # =============================================================
@@ -296,16 +314,22 @@ with tab4:
                 """
                 contents_payload.append(prompt_inquiry)
                 
-                # इमेज और टेक्स्ट फाइलों को सुरक्षित तरीके से जोड़ना
+                # फाइल प्रोसेसिंग (इमेज, पीडीएफ और टेक्स्ट)
                 if uploaded_files:
                     for f in uploaded_files:
                         try:
-                            if f.type and f.type.startswith("image/"):
+                            if f.type.startswith("image/"):
                                 img = Image.open(f)
                                 contents_payload.append(img)
-                            elif f.name.endswith(".txt"):
+                            elif f.type == "application/pdf" or f.name.endswith(".pdf"):
+                                reader = pypdf.PdfReader(f)
+                                pdf_text = ""
+                                for page in reader.pages:
+                                    pdf_text += page.extract_text() or ""
+                                contents_payload.append(f"\n[संलग्न PDF फाइल ({f.name}) का टेक्स्ट]:\n{pdf_text}\n")
+                            else:
                                 text_data = f.getvalue().decode("utf-8", errors="ignore")
-                                contents_payload.append(f"\n[संलग्न टेक्स्ट ({f.name})]:\n{text_data}\n")
+                                contents_payload.append(f"\n[संलग्न टेक्स्ट फाइल ({f.name})]:\n{text_data}\n")
                         except Exception:
                             pass
                 
@@ -320,22 +344,3 @@ with tab4:
                     file_name=f"Inquiry_Report_{complaint_no}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
-
-# =============================================================
-# टैब 5: ऑनलाइन शासकीय नियम एवं विधिक निर्देशिका
-# =============================================================
-with tab5:
-    st.subheader("📖 शासकीय नियम, अधिनियम एवं प्रक्रिया निर्देशिका")
-    
-    query = st.text_input("नियम / परिपत्र संबंधी प्रश्न दर्ज करें:", placeholder="उदा. छत्तीसगढ़ में राशन दुकान निलंबन की कानूनी प्रक्रिया क्या है?")
-    if st.button("नियम व कानूनी प्रावधान देखें", key="btn_search_law"):
-        if query:
-            with st.spinner("विधिक प्रावधानों का विश्लेषण किया जा रहा है..."):
-                search_prompt = f"""
-                छत्तीसगढ़ खाद्य निरीक्षक के कार्य के संदर्भ में निम्नलिखित प्रश्न का अद्यतन कानूनी व प्रक्रियात्मक उत्तर दें:
-                प्रश्न: {query}
-                
-                आवश्यक वस्तु अधिनियम 1955, छत्तीसगढ़ पीडीएस नियंत्रण आदेश 2016, या संबंधित अधिनियमों की धाराएं एवं प्रक्रिया स्पष्ट करें।
-                """
-                search_res = call_gemini([search_prompt])
-                st.markdown(search_res)
